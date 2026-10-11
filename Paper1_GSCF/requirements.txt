@@ -1,0 +1,8 @@
+pandas
+numpy
+scipy
+statsmodels
+patsy
+matplotlib
+python-docx
+Pillow
