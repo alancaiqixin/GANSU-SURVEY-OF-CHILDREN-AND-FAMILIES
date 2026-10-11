@@ -1,0 +1,77 @@
+
+library(dplyr)
+library(sf)
+library(sp)
+library(tidyverse)
+library(readxl)
+library(writexl)
+library(stringr)
+library(ncdf4)
+
+################################################################################
+#read data
+################################################################################
+setwd("C:/Users/Kaifs/OneDrive/Documents/dropbox_penn/Dropbox/GitHub/ClimateDataIntro/")
+#read PA county shapefile
+pa<-st_read("PaCounty2024_03/PaCounty2024_03.shp")
+plot(pa %>% dplyr::select(COUNTY_NAM))
+
+#read era5-heat data (utci)
+#remember to extract folder before reading
+our_nc_data<- nc_open("utci_philly/2023_03_utci/fce39d66-33fa-4caf-a2fe-81a25f76fc2f-ECMWF_utci_20230315_v1_area_subset.nc")
+
+################################################################################
+#clean netcdf
+################################################################################
+#derive lat long time utci
+lat <- ncvar_get(our_nc_data, "lat")
+nlat <- dim(lat) 
+lat
+lon <- ncvar_get(our_nc_data, "lon")
+nlon <- dim(lon) 
+time <- ncvar_get(our_nc_data, "time")
+nt <- dim(time) 
+nt # 24 hours
+utci <- ncvar_get(our_nc_data, "utci") 
+dim(utci)
+
+lonlattime <- as.matrix(expand.grid(lon,lat,time)) # this might take several seconds with wide spatial-temproral coverage
+#reshape whole utci array
+utci_vec_long <- as.vector(utci)
+length(utci) 
+#Create data.frame
+utci_obs <- data.frame(cbind(lonlattime, utci_vec_long))
+colnames(utci_obs) <- c('Long','Lat','hour','utci_Kelvin')
+utci_obs$utci_celsisu <- utci_obs$utci_Kelvin - 273.15
+
+#from hourly to daily utci
+utci_obs_ave <- utci_obs %>%
+  group_by(Long,Lat) %>%
+  summarise(utci_ave = mean(utci_celsisu))
+
+################################################################################
+#spatial join
+################################################################################
+
+#set spatial reference the same 
+#In the context of coordinate reference systems (CRS)
+#"4326" refers to the EPSG (European Petroleum Survey Group) code for the WGS84 (World Geodetic System 1984) CRS. 
+#WGS84 is a widely used geographic CRS, particularly for representing latitude and longitude coordinates on the Earth's surface.
+utci_point <- st_as_sf(utci_obs_ave,coords=c("Long","Lat"), crs = 4326)
+pa<-st_transform(pa, crs = 4326)
+st_crs(utci_point) <- st_crs(pa)
+
+#st_join
+county_join<-st_join(utci_point, left = TRUE, pa[c("COUNTY_NAM")])# join points
+
+#county-specific utci
+county_ave <- county_join %>% 
+  filter(!is.na(COUNTY_NAM)) %>%
+  group_by(COUNTY_NAM) %>%
+  summarise(utci=mean(utci_ave,na.rm = TRUE))
+
+merge( pa,
+       as.data.frame( county_ave ) %>% dplyr::select( COUNTY_NAM, utci ),
+       by = 'COUNTY_NAM' ) %>%
+  ggplot( ) +
+  geom_sf( aes( fill = utci ))
